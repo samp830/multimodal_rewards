@@ -127,12 +127,14 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         if capture_video and idx == 0:
             if env_id == "CLIPRewardedCartPoleEnv":
                 env = CLIPRewardedCartPoleEnv(episode_length=200)
+                env.reset(seed=seed)
             else:
                 env = gym.make(env_id, render_mode="rgb_array")
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
             if env_id == "CLIPRewardedCartPoleEnv":
                 env = CLIPRewardedCartPoleEnv(episode_length=200)
+                env.reset(seed=seed)
             else:
                 env = gym.make(env_id)
         env = gym.wrappers.RecordEpisodeStatistics(env)
@@ -293,13 +295,16 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 with torch.no_grad():
                     target_max, _ = target_network(data.next_observations).max(dim=1)
                     if args.model_id == "":
-                        td_target = data.rewards.flatten() + args.gamma * target_max * (1 - data.dones.flatten())
+                        rewards = data.rewards.flatten()
+                        td_target = rewards + args.gamma * target_max * (1 - data.dones.flatten())
                     else:
                         preprocessed_states = [preprocess(Image.fromarray(image)) for image in data.states]
                         preprocessed_states = torch.stack(preprocessed_states)
                         image_features = model.encode_image(preprocessed_states).float()
                         rewards = torch.nn.functional.cosine_similarity(image_features, text_encoding).to(device)
                         td_target = rewards + args.gamma * target_max * (1 - data.dones.flatten())
+
+                writer.add_scalar("charts/avg_batch_reward", torch.mean(rewards), global_step)
                    
                 old_val = q_network(data.observations).gather(1, data.actions).squeeze()
                 loss = F.mse_loss(td_target, old_val)
