@@ -49,6 +49,8 @@ class Args:
     """whether to upload the saved model to huggingface"""
     hf_entity: str = ""
     """the user or org name of the model repository from the Hugging Face Hub"""
+    model_id: str = "clip_vit"
+    """the multimodal model to use, empty for environment reward"""
 
     # Algorithm specific arguments
     env_id: str = "CartPole-v1"
@@ -216,7 +218,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     start_time = time.time()
 
     # TRY NOT TO MODIFY: start the game
-    model, preprocess, text = initialize_multimodal_model("clip", args.env_id)
+    model, preprocess, text = initialize_multimodal_model("clip_vit", args.env_id)
     text_encoding = model.encode_text(text)
     obs, _ = envs.reset(seed=args.seed)
     for global_step in range(args.total_timesteps):
