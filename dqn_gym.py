@@ -16,11 +16,13 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 #envs
+from buffer import StateReplayBuffer
 from clip_rewarded_cart_pole import CLIPRewardedCartPoleEnv
 from clip_rewarded_mountain_car_continuous import CLIPRewardedContinuousMountainCarEnv
 
 #multimodal
 from PIL import Image
+import cv2
 import open_clip
 from transformers import CLIPVisionModelWithProjection, CLIPTokenizer, CLIPTextModelWithProjection
 
@@ -92,6 +94,10 @@ def get_text_string(env_id):
 
 def initialize_multimodal_model(model_id, env_id):
     preprocess = None
+    model = None
+    text_encoding = None
+    if model_id == "":
+        return model, preprocess, text_encoding
     if model_id == "clip_vit":
         model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')
         tokenizer = open_clip.get_tokenizer('ViT-B-32')
@@ -208,18 +214,29 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     target_network = QNetwork(envs).to(device)
     target_network.load_state_dict(q_network.state_dict())
 
-    rb = ReplayBuffer(
-        args.buffer_size,
-        envs.single_observation_space,
-        envs.single_action_space,
-        device,
-        handle_timeout_termination=False,
-    )
+    if args.model_id == "":
+        rb = ReplayBuffer(
+            args.buffer_size,
+            envs.single_observation_space,
+            envs.single_action_space,
+            device,
+            handle_timeout_termination=False,
+        )
+    else:
+        rb = StateReplayBuffer(
+            args.buffer_size,
+            envs.single_observation_space,
+            (224, 224, 3),
+            envs.single_action_space,
+            device,
+            handle_timeout_termination=False,
+        )
     start_time = time.time()
 
     # TRY NOT TO MODIFY: start the game
-    model, preprocess, text = initialize_multimodal_model("clip_vit", args.env_id)
-    text_encoding = model.encode_text(text)
+    if args.model_id != "":
+        model, preprocess, text = initialize_multimodal_model(args.model_id, args.env_id)
+        text_encoding = model.encode_text(text)
     obs, _ = envs.reset(seed=args.seed)
     for global_step in range(args.total_timesteps):
         # ALGO LOGIC: put action logic here
@@ -234,8 +251,10 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
         # import pdb; pdb.set_trace
         # images = [env.render() for env in envs.envs]
-        import pdb; pdb.set_trace()
-        images = [env.render() for env in envs.envs]  # Get the image
+        # import pdb; pdb.set_trace()
+        if args.model_id != "":
+            images = [env.render() for env in envs.envs][0]  # Get the image
+            state = cv2.resize(images, (224, 224), interpolation=cv2.INTER_LINEAR)
         # image = preprocess(Image.fromarray(images[0])).unsqueeze(0)
         # with torch.no_grad(), torch.cuda.amp.autocast():
         #     image_features = model.encode_image(image)
@@ -258,7 +277,10 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             if trunc:
                 real_next_obs[idx] = infos["final_observation"][idx]
         # rb.add(obs, real_next_obs, actions, scores, terminations, infos)
-        rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
+        if args.model_id == "":
+            rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
+        else:
+            rb.add(obs, real_next_obs, state, actions, terminations, infos)
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
@@ -270,7 +292,19 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 # import pdb; pdb.set_trace()
                 with torch.no_grad():
                     target_max, _ = target_network(data.next_observations).max(dim=1)
-                    td_target = data.rewards.flatten() + args.gamma * target_max * (1 - data.dones.flatten())
+                    if args.model_id == "":
+                        print(data.rewards.flatten())
+                        import pdb; pdb.set_trace()
+                        td_target = data.rewards.flatten() + args.gamma * target_max * (1 - data.dones.flatten())
+                    else:
+                        # import pdb; pdb.set_trace()
+                        preprocessed_states = [preprocess(Image.fromarray(image)) for image in data.states]
+                        preprocessed_states = torch.stack(preprocessed_states)
+                        image_features = model.encode_image(preprocessed_states).float()
+                        rewards = torch.nn.functional.cosine_similarity(image_features, text_encoding).to(device)
+                        td_target = rewards + args.gamma * target_max * (1 - data.dones.flatten())
+                        # print(rewards)
+                        # import pdb; pdb.set_trace()
                 old_val = q_network(data.observations).gather(1, data.actions).squeeze()
                 loss = F.mse_loss(td_target, old_val)
 
