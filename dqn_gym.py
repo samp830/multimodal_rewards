@@ -293,18 +293,14 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 with torch.no_grad():
                     target_max, _ = target_network(data.next_observations).max(dim=1)
                     if args.model_id == "":
-                        print(data.rewards.flatten())
-                        import pdb; pdb.set_trace()
                         td_target = data.rewards.flatten() + args.gamma * target_max * (1 - data.dones.flatten())
                     else:
-                        # import pdb; pdb.set_trace()
                         preprocessed_states = [preprocess(Image.fromarray(image)) for image in data.states]
                         preprocessed_states = torch.stack(preprocessed_states)
                         image_features = model.encode_image(preprocessed_states).float()
                         rewards = torch.nn.functional.cosine_similarity(image_features, text_encoding).to(device)
                         td_target = rewards + args.gamma * target_max * (1 - data.dones.flatten())
-                        # print(rewards)
-                        # import pdb; pdb.set_trace()
+                   
                 old_val = q_network(data.observations).gather(1, data.actions).squeeze()
                 loss = F.mse_loss(td_target, old_val)
 
@@ -330,7 +326,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
         torch.save(q_network.state_dict(), model_path)
         print(f"model saved to {model_path}")
-        from cleanrl_utils.evals.dqn_eval import evaluate
+        from dqn_eval import evaluate
 
         episodic_returns = evaluate(
             model_path,
