@@ -14,9 +14,15 @@ import tyro
 from stable_baselines3.common.buffers import ReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 
+
+#envs
+from clip_rewarded_cart_pole import CLIPRewardedCartPoleEnv
+from clip_rewarded_mountain_car_continuous import CLIPRewardedContinuousMountainCarEnv
+
 #multimodal
 from PIL import Image
 import open_clip
+from transformers import CLIPVisionModelWithProjection, CLIPTokenizer, CLIPTextModelWithProjection
 
 
 @dataclass
@@ -77,27 +83,50 @@ class Args:
 
 
 def get_text_string(env_id):
+    if env_id == "CLIPRewardedCartPoleEnv":
+        return "pole vertically upright on top of the cart"
     if env_id == "CartPole-v1":
         return "pole vertically upright on top of the cart"
 
 def initialize_multimodal_model(model_id, env_id):
-    if model_id == "clip":
+    preprocess = None
+    if model_id == "clip_vit":
         model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')
         tokenizer = open_clip.get_tokenizer('ViT-B-32')
         text_encoding = tokenizer([get_text_string(env_id)])
         return model, preprocess, text_encoding
-
-# image = preprocess(Image.open("image_step_1.jpg")).unsqueeze(0)
-# text = tokenizer(["an upright pendulum"])
+    elif model_id == "clip_rn101": 
+        model, _, preprocess = open_clip.create_model_and_transforms('RN101', pretrained='openai')
+        tokenizer = open_clip.get_tokenizer('RN101')
+        text_encoding = tokenizer([get_text_string(env_id)])
+        return model, preprocess, text_encoding
+    elif model_id == "clip_convnext":
+        model, _, preprocess = open_clip.create_model_and_transforms('convnext_base', pretrained='laion400m_s13b_b51k')
+        tokenizer = open_clip.get_tokenizer('convnext_base')
+        text_encoding = tokenizer([get_text_string(env_id)])
+        return model, preprocess, text_encoding
+    if model_id == "CLIP4CLip":
+        model = CLIPVisionModelWithProjection.from_pretrained("Searchium-ai/clip4clip-webvid150k")
+        model = model.eval()
+        text_model = CLIPTextModelWithProjection.from_pretrained("Searchium-ai/clip4clip-webvid150k")
+        tokenizer = CLIPTokenizer.from_pretrained("Searchium-ai/clip4clip-webvid150k")
+        inputs = tokenizer(text=get_text_string(env_id), return_tensors="pt")
+    outputs = model(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"])
 
 
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
         if capture_video and idx == 0:
-            env = gym.make(env_id, render_mode="rgb_array")
+            if env_id == "CLIPRewardedCartPoleEnv":
+                env = CLIPRewardedCartPoleEnv(episode_length=200)
+            else:
+                env = gym.make(env_id, render_mode="rgb_array")
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
-            env = gym.make(env_id)
+            if env_id == "CLIPRewardedCartPoleEnv":
+                env = CLIPRewardedCartPoleEnv(episode_length=200)
+            else:
+                env = gym.make(env_id)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env.action_space.seed(seed)
 
@@ -201,13 +230,14 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
-
-        # import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace
+        # images = [env.render() for env in envs.envs]
+        import pdb; pdb.set_trace()
         images = [env.render() for env in envs.envs]  # Get the image
-        image = preprocess(Image.fromarray(images[0])).unsqueeze(0)
-        with torch.no_grad(), torch.cuda.amp.autocast():
-            image_features = model.encode_image(image)
-            scores = torch.nn.functional.cosine_similarity(image_features, text_encoding).cpu().numpy()
+        # image = preprocess(Image.fromarray(images[0])).unsqueeze(0)
+        # with torch.no_grad(), torch.cuda.amp.autocast():
+        #     image_features = model.encode_image(image)
+        #     scores = torch.nn.functional.cosine_similarity(image_features, text_encoding).cpu().numpy()
             # import pdb; pdb.set_trace()
             # print(scores)
             # print(rewards)
@@ -225,7 +255,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         for idx, trunc in enumerate(truncations):
             if trunc:
                 real_next_obs[idx] = infos["final_observation"][idx]
-        rb.add(obs, real_next_obs, actions, scores, terminations, infos)
+        # rb.add(obs, real_next_obs, actions, scores, terminations, infos)
+        rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
@@ -234,6 +265,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         if global_step > args.learning_starts:
             if global_step % args.train_frequency == 0:
                 data = rb.sample(args.batch_size)
+                # import pdb; pdb.set_trace()
                 with torch.no_grad():
                     target_max, _ = target_network(data.next_observations).max(dim=1)
                     td_target = data.rewards.flatten() + args.gamma * target_max * (1 - data.dones.flatten())
